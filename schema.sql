@@ -1,6 +1,6 @@
--- Milestone 2. Only what the milestone needs: the events table and the indexes
--- that milestone 3 will want. The runs table is milestone 7 and the materialized
--- marginals are milestone 6, so they are not here yet.
+-- the events table, plus the marginals the statistics need. those are materialized
+-- because computing them per row turns a pair lookup into a full aggregate over ten
+-- million rows, which is measured in NOTES.md.
 
 CREATE TABLE IF NOT EXISTS events (
     report_id     TEXT NOT NULL,
@@ -9,14 +9,26 @@ CREATE TABLE IF NOT EXISTS events (
     reaction      TEXT NOT NULL,          -- MedDRA preferred term, normalised
     serious       BOOLEAN,
     received_date DATE,
-    -- Re-ingesting the same reports conflicts on this key and inserts nothing,
-    -- which is the whole idempotency story. safetyreportversion is deliberately
-    -- not in the key: a later version of a report that repeats a drug+reaction
-    -- pair is skipped, but reactions added by a later version are new rows and
-    -- still land. See NOTES.md.
+    -- re-ingesting the same reports conflicts on this key and inserts nothing, which is
+    -- the whole idempotency story. caseversion is deliberately not in the key, so a
+    -- follow-up that repeats a pair is skipped while any new reaction still lands
     PRIMARY KEY (report_id, drug, reaction)
 );
 
 CREATE INDEX IF NOT EXISTS events_drug_reaction ON events (drug, reaction);
 CREATE INDEX IF NOT EXISTS events_reaction      ON events (reaction);
 CREATE INDEX IF NOT EXISTS events_received_date ON events (received_date);
+
+-- how many reports mention each drug, and each reaction, plus the report count itself.
+-- REFRESH MATERIALIZED VIEW after a load
+CREATE MATERIALIZED VIEW IF NOT EXISTS drug_totals AS
+    SELECT drug, count(DISTINCT report_id) AS total FROM events GROUP BY drug;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS reaction_totals AS
+    SELECT reaction, count(DISTINCT report_id) AS total FROM events GROUP BY reaction;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS event_totals AS
+    SELECT count(DISTINCT report_id) AS reports FROM events;
+
+CREATE UNIQUE INDEX IF NOT EXISTS drug_totals_drug         ON drug_totals (drug);
+CREATE UNIQUE INDEX IF NOT EXISTS reaction_totals_reaction ON reaction_totals (reaction);

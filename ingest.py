@@ -88,6 +88,7 @@ def main():
         cur.execute("SELECT count(*) FROM events")
         after = cur.fetchone()[0]
     conn.commit()
+    db.refresh_marginals(conn)
     conn.close()
 
     print(f"{before:,} rows in events before, {after:,} after, {after - before:,} new")

@@ -9,15 +9,21 @@ published reference signals.
 
 ## where it is
 
-milestones 1 to 5 are done. `run.py` counts reports from the openFDA api, `ingest.py`
-loads a date range into postgres, `signals.py` does PRR and ROR, `report.py` writes the
-ranking to markdown, and `evaluate.py` scores it against the EU-ADR reference set.
+milestones 1 to 6 are done. `run.py` counts reports from the openFDA api, `ingest.py`
+loads a date range from the api, `bulk_ingest.py` loads the quarterly extract files,
+`signals.py` does PRR and ROR, `report.py` writes the ranking to markdown, and
+`evaluate.py` scores it against the EU-ADR reference set.
 
-a full day of reports, 2024-01-01, loaded as 1508 reports and 26032 rows, and running
-the same ingest again added 0 rows.
+the full 2024 Q1 extract, 406,184 reports, loaded as 10,308,028 rows in 218 seconds, for
+522,047 pairs with at least three reports. loading the same quarter twice adds nothing,
+because the primary key rejects rows that are already there.
 
-the numbers the report and the evaluation print are not usable yet. see the statistics
-and evaluation sections.
+the marginals are materialized, which takes the pair query from 1699 ms to 8.9 ms,
+measured with EXPLAIN ANALYZE.
+
+the evaluation now scores 91 of the 93 reference pairs, at an AUC of 0.687. both numbers
+were 47 of 93 and 0.571 when only a day of api data was loaded, which is the point of
+having the bulk files at all.
 
 ## what this is not
 
@@ -96,6 +102,31 @@ a year of reports is way past what paging this api can reach, it refuses `skip` 
 the table holds one day of 2024, so a drug withdrawn before then has no rows. rofecoxib
 is one of those.
 
+## loading the quarterly files
+
+the api is fine for a day and useless for a population. `bulk_ingest.py` reads the
+quarterly ASCII extract the fda publishes, which is a zip of dollar delimited files with
+a header row.
+
+```
+python bulk_ingest.py --quarter 2024q1
+python bulk_ingest.py --quarter 2024q1 --limit 20000
+python bulk_ingest.py --quarter 2024q1 --replace
+```
+
+it downloads the zip to `data/` if it is not there, streams DEMO, DRUG and REAC into
+staging tables through COPY, and lets postgres do the join, because the join is tens of
+millions of rows and would not fit in python.
+
+`--replace` clears the events table first, which is what you want when switching between
+the api and the bulk files: they use different report ids, so the two do not merge
+meaningfully.
+
+the detail files are filtered against the staged report ids as they stream. doing it
+afterwards with a `DELETE ... WHERE primaryid NOT IN (...)` against a few hundred
+thousand ids is a nested scan that will not finish, which is worth knowing before
+writing it the obvious way.
+
 ## how the data is treated
 
 each report becomes one row per drug and reaction combo. openFDA says a report lists its
@@ -130,6 +161,11 @@ python signals.py
 python signals.py --min-reports 5
 ```
 
+the drug and reaction marginals are materialized views, refreshed at the end of every
+load. computing them per row instead turns a pair lookup into a full aggregate over ten
+million rows: the same query goes from 8.9 ms to 1699 ms, which is the difference
+between a lookup and 17 bitmap scans reading 252,254 buffers.
+
 `report.py` ranks them into markdown. that file isn't committed because the numbers move
 with the data.
 
@@ -139,18 +175,19 @@ python report.py --top 100 --min-reports 5 --out report.md
 ```
 
 the report starts with what it was computed from, the report count and the date range.
-right now it says the table holds a single day.
 
-the numbers from one day are not usable as signals. 1508 reports and 1401 distinct
-reactions means a four report pair can hit a PRR in the hundreds. the top value right
-now, anakinra with therapy partial responder, comes from four reports. this needs the
-whole population, which is milestone 6.
+**ranking on raw PRR puts junk at the top.** the highest value in the quarter is
+ajmaline with gammopathy at 355,404, which is arithmetically correct: 7 of the 8 reports
+mentioning ajmaline also mention gammopathy. it is useless as a signal because a is 7,
+and PRR is unstable when the counts are small. of 522,047 pairs, the ones with the
+largest ratios are the ones with the smallest numerators. a seriousness filter or a
+higher floor would help and neither is here yet.
 
-most of the top of that table is confounding anyway. a reaction that's also the drug's
-indication ranks high because the report is describing the condition being treated, not
-a side effect. vedolizumab with colitis ulcerative and dupixent with dermatitis atopic
-are both that, same as the device reactions against drugs delivered by those devices.
-nothing here filters that out, but it's worth knowing when reading the table.
+most of the rest of the top is confounding. a reaction that's also the drug's indication
+ranks high because the report is describing the condition being treated, not a side
+effect. vedolizumab with colitis ulcerative and dupixent with dermatitis atopic are both
+that, same as the device reactions against drugs delivered by those devices. nothing here
+filters that out, but it's worth knowing when reading the table.
 
 ## evaluation against EU-ADR
 
@@ -173,26 +210,35 @@ and needs neither R nor the network.
 
 coverage prints before any metric. a pair the loaded data can't support counts as missing
 rather than as a negative, because calling it a negative would flatter the specificity.
-on the current single day:
+on the full 2024 Q1 quarter:
 
 ```
 reference pairs: 93
   43 positive, 50 negative
-coverage: 47 of 93 pairs scored, 46 missing
-AUC: 0.571
+coverage: 91 of 93 pairs scored, 2 missing
+AUC: 0.687
+
+threshold   recall   specificity   precision   hits   false alarms
+     1.00     0.81          0.33        0.51     34             33
+     2.00     0.79          0.39        0.52     33             30
+     3.00     0.79          0.57        0.61     33             21
+     5.00     0.57          0.76        0.67     24             12
 ```
 
-that AUC is barely above chance and 46 of the 93 pairs can't be scored at all. both are
-what one day gives you, a drug withdrawn in 2004 isn't in a day of 2024, so rofecoxib
-with myocardial infarction is one of the 46. these are the numbers the harness produces,
-not the numbers the method earns, and they shouldn't be quoted as a result until the
-bulk files are in.
+42 of the 43 positives are scoreable and 0.687 is above chance, which is what the bulk
+load was for. the two that are not are the outcomes with no matching reaction term, not
+pairs the data refused.
+
+the threshold table is the honest part. at a PRR of 1 the method catches 81 percent of
+the known positives and also flags 33 of the 49 negatives, which is not a usable screen.
+pushing the threshold to 5 fixes most of the false alarms but loses a third of the true
+ones. that trade is the whole problem, and it is why the AUC is reported rather than a
+single threshold.
 
 the reference outcomes are named as OMOP cohorts rather than MedDRA terms, so
 `evaluate.py` maps each of the 10 to the reaction terms that stand for it, `HOI Upper GI
 #3` to gastrointestinal haemorrhage, melaena and gastric ulcer for example. a pair takes
-its highest matching term. cardiac valve fibrosis and stevens-johnson syndrome matched
-nothing in the loaded day.
+its highest matching term.
 
 one caveat that goes with any number here. EU-ADR was built for electronic health record
 and claims databases, not a spontaneous reporting system. FAERS is voluntary, duplicated
@@ -220,5 +266,5 @@ reporting would need saying too.
 
 ## next
 
-milestone 6 loads the bulk quarterly FAERS files, which is what the statistics and the
-evaluation need before they mean anything.
+milestone 7 is the failure handling: the `runs` table, halting on a partial ingest, and
+`run.py --status` so a job that quietly stopped is visible.

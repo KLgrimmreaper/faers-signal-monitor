@@ -7,18 +7,18 @@ import db
 MIN_REPORTS = 3
 
 PAIR_COUNTS = """
-    WITH totals AS (
-        SELECT count(DISTINCT report_id) AS reports FROM events
-    )
     SELECT
         e.drug,
         e.reaction,
         count(DISTINCT e.report_id) AS reports_both,
-        (SELECT count(DISTINCT report_id) FROM events WHERE drug = e.drug) AS drug_total,
-        (SELECT count(DISTINCT report_id) FROM events WHERE reaction = e.reaction) AS reaction_total,
-        (SELECT reports FROM totals) AS total_reports
+        dt.total AS drug_total,
+        rt.total AS reaction_total,
+        et.reports AS total_reports
     FROM events e
-    GROUP BY e.drug, e.reaction
+    JOIN drug_totals dt     ON dt.drug = e.drug
+    JOIN reaction_totals rt ON rt.reaction = e.reaction
+    CROSS JOIN event_totals et
+    GROUP BY e.drug, e.reaction, dt.total, rt.total, et.reports
     HAVING count(DISTINCT e.report_id) >= %s
     ORDER BY e.drug, e.reaction
 """

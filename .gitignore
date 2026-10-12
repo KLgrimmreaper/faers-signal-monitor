@@ -15,3 +15,6 @@ report.md
 
 # Downloaded by make_reference_set.py. The converted CSV beside it is committed.
 fixtures/*.rda
+
+# Quarterly extracts, re-downloaded by bulk_ingest.py. Far too large for the repo.
+data/
