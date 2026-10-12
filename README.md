@@ -9,10 +9,12 @@ published reference signals.
 
 ## where it is
 
-milestones 1 to 8 are done. `run.py` counts reports from the openFDA api and reports on
-past runs, `ingest.py` loads a date range from the api, `bulk_ingest.py` loads the
-quarterly extract files, `signals.py` does PRR and ROR, `report.py` writes the ranking to
-markdown, and `evaluate.py` scores it against the EU-ADR reference set. 105 tests.
+milestones 1 to 10 are done, the last one being optional. `run.py` counts reports from the
+openFDA api and reports on past runs, `ingest.py` loads a date range from the api,
+`bulk_ingest.py` loads the quarterly extract files, `signals.py` does PRR and ROR,
+`report.py` writes the ranking to markdown, `publish.py` sends the signals to a hosted
+database, `evaluate.py` scores against the EU-ADR reference set, and `model.py` tries to
+beat PRR and does not. 113 tests.
 
 the full 2024 Q1 extract, 406,184 reports, loaded as 10,308,028 rows in 218 seconds, for
 522,047 pairs with at least three reports. loading the same quarter twice adds nothing,
@@ -300,7 +302,7 @@ reporting would need saying too.
 python -m pytest -q
 ```
 
-105 tests, no network needed. most of them need no database either: the arithmetic, the
+113 tests, no network needed. most of them need no database either: the arithmetic, the
 report formatting, the api retry behaviour, the loader's parsing and filtering, and the
 checks that halt a bad load are all plain functions. `requests.get` is swapped out for
 the retry tests, so nothing is fetched.
@@ -325,6 +327,7 @@ python -m pytest -q
 | `test_evaluate.py` | AUC, recall, specificity, precision@K |
 | `test_fixture.py` | the whole evaluation against a committed fixture |
 | `test_publish.py` | the selection, and the population floor |
+| `test_model.py` | the features, the scaling, and that the training loop fits XOR |
 
 `test_fixture.py` is the regression check. it loads `fixtures/euadr_fixture.sql`, 3,060
 synthetic reports built so every reference pair is either clearly enriched or clearly
@@ -380,7 +383,42 @@ the image holds the scripts and no credentials; connection settings come from th
 environment. it is not on a registry, since publishing it needs credentials this machine
 does not have.
 
+## the model, and why it does not help
+
+milestone 10 was optional and this is the verdict: it does not help.
+
+```
+python model.py
+```
+
+```
+  PRR alone           AUC 0.687
+  model on top        AUC 0.692
+  model across seeds  0.652 to 0.700
+  mean +0.010, 95 percent interval -0.113 to +0.124
+  the model came out ahead in 57 percent of 2000 resamples
+```
+
+a small MLP takes PRR plus three log-scaled counts and predicts whether a pair is a known
+positive. the folds hold out whole outcomes, so it is asked to rank pairs for an outcome
+it never saw. that is the honest question and it is the hard one.
+
+the answer is no. `0.692` against `0.687` is inside the model's own seed-to-seed spread of
+`0.652` to `0.700`, and the bootstrap interval spans zero. the model is not measurably
+better than the ratio it was meant to improve on, and the honest read is that PRR is the
+answer.
+
+two reasons, and neither is fixable by trying harder. there are 43 positives in the
+reference set, which is nothing to train on. and the labels are the target: the model is
+trained on which pairs are already believed to be real, so it can only reproduce that
+judgement, and it never had a chance to beat the labels it learned from.
+
+`model.py` prints this rather than a number chosen to look good. the sanity check at the
+top fits XOR before anything else runs, so a low score is the data and not a broken
+training loop.
+
 ## next
 
-milestone 10 is optional: a small model on top of PRR, evaluated against the same
-reference set, with an honest verdict either way.
+nothing is planned. the project does what the plan set out: it loads the reports, computes
+the statistics, publishes them, and measures itself against a published reference set,
+including the milestone that did not work.

@@ -104,6 +104,7 @@ def score_reference_pairs(reference, counts, drugs, reactions, total):
         best = None
         matched_term = None
         best_reports = 0
+        best_reaction_total = 0
         if drug_total:
             for term in terms:
                 reaction_total = reactions.get(term)
@@ -115,6 +116,7 @@ def score_reference_pairs(reference, counts, drugs, reactions, total):
                     best = value
                     matched_term = term
                     best_reports = a
+                    best_reaction_total = reaction_total
 
         scored.append(
             {
@@ -122,6 +124,8 @@ def score_reference_pairs(reference, counts, drugs, reactions, total):
                 "outcome": record["outcomeName"],
                 "ground_truth": record["groundTruth"],
                 "reports": best_reports,
+                "drug_total": drug_total or 0,
+                "reaction_total": best_reaction_total,
                 "prr": best,
                 "term": matched_term,
             }

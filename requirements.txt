@@ -4,3 +4,8 @@ psycopg[binary]==3.3.6
 # Only needed to rebuild fixtures/euadr_reference_set.csv from the published R data
 # file. The evaluation itself reads the CSV and does not import this.
 pyreadr==0.5.7
+
+# Only needed by model.py and its tests. The cpu build on purpose: nothing here wants a
+# gpu, and the cpu wheel is a fraction of the size
+numpy==2.5.2
+torch==2.14.0
