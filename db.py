@@ -1,5 +1,6 @@
 import os
 import pathlib
+from urllib.parse import quote
 
 import psycopg
 
@@ -11,14 +12,29 @@ DEFAULTS = {
     "dbname": "faers",
 }
 
+# libpq calls the variable PGDATABASE, not PGDBNAME, so the obvious PG + key.upper()
+# is wrong for this one and silently leaves the default in place
+ENV_VARS = {
+    "host": "PGHOST",
+    "port": "PGPORT",
+    "user": "PGUSER",
+    "password": "PGPASSWORD",
+    "dbname": "PGDATABASE",
+}
+
 
 def connect():
-    # defaults match docker-compose.yml. PG* env vars win if they are set
+    # Built as a connection string on purpose. Passing dbname as a keyword does not
+    # survive PGDATABASE being set: libpq lets the variable win, so the argument is
+    # ignored and the wrong database opens
     settings = {
-        key: os.environ.get("PG" + key.upper(), value)
+        key: os.environ.get(ENV_VARS[key], value)
         for key, value in DEFAULTS.items()
     }
-    return psycopg.connect(**settings)
+    conninfo = " ".join(
+        f"{key}={quote(str(value), safe='')}" for key, value in settings.items()
+    )
+    return psycopg.connect(conninfo)
 
 
 def apply_schema(conn):

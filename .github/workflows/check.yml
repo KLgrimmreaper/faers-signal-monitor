@@ -7,16 +7,46 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+
+    # the database tests run against their own database, never the loaded one. without
+    # this service they skip instead, so the job still means something with no server
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: faers
+          POSTGRES_PASSWORD: faers
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U faers"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: faers
+      PGPASSWORD: faers
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
       - name: No em dashes or en dashes
         run: python check_dashes.py
-      # signals.py imports psycopg at the top, so the driver has to be present even
-      # though these tests never open a connection.
+
+      # signals.py imports psycopg at the top, so the driver has to be present
       - name: Install dependencies
         run: python -m pip install -r requirements.txt pytest
+
+      - name: Create the test database
+        run: createdb -h localhost -U faers faers_test
+
       - name: Tests
         run: python -m pytest -q

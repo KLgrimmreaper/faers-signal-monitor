@@ -45,6 +45,19 @@ def build_events(report):
     return list(rows)
 
 
+def check_fetch(available, reports):
+    """Stop when the api says a range has reports and then returns none.
+
+    A genuinely empty range is fine and returns zero on both sides, which is not a
+    failure. The mismatch is the thing that means something went wrong.
+    """
+    if available > 0 and not reports:
+        raise ValueError(
+            f"openFDA reports {available:,} in this range but returned no records. "
+            f"stopping rather than writing an empty load"
+        )
+
+
 def main():
     day = datetime.date.today()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -72,6 +85,15 @@ def main():
             f"order, so this is the start of the range, not a sample of it. "
             f"Narrow the dates or raise --limit."
         )
+
+    # the failure this guards against is a fetch that returns nothing while the range
+    # clearly holds reports. the api said it has them and then handed over none, so
+    # writing now would leave a load that looks fine and is empty
+    try:
+        check_fetch(available, reports)
+    except ValueError as exc:
+        print(f"failed: {exc}")
+        return 1
 
     rows = [row for report in reports for row in build_events(report)]
     print(f"{len(rows):,} event rows")

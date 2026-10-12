@@ -256,6 +256,13 @@ def load(conn, archive, members, limit):
     conn.commit()
     print(f"  joined in {time.time() - step:.1f}s")
 
+    # the staging tables run to a couple of gigabytes for a quarter and are no use
+    # afterwards, so they do not stay around
+    print("dropping the staging tables")
+    with conn.cursor() as cur:
+        cur.execute("DROP TABLE IF EXISTS stage_demo, stage_drug, stage_reac")
+    conn.commit()
+
     return reports, added
 
 

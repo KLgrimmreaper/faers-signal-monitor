@@ -9,10 +9,10 @@ published reference signals.
 
 ## where it is
 
-milestones 1 to 7 are done. `run.py` counts reports from the openFDA api and reports on
+milestones 1 to 8 are done. `run.py` counts reports from the openFDA api and reports on
 past runs, `ingest.py` loads a date range from the api, `bulk_ingest.py` loads the
 quarterly extract files, `signals.py` does PRR and ROR, `report.py` writes the ranking to
-markdown, and `evaluate.py` scores it against the EU-ADR reference set.
+markdown, and `evaluate.py` scores it against the EU-ADR reference set. 98 tests.
 
 the full 2024 Q1 extract, 406,184 reports, loaded as 10,308,028 rows in 218 seconds, for
 522,047 pairs with at least three reports. loading the same quarter twice adds nothing,
@@ -294,8 +294,44 @@ reporting would need saying too.
   writing the table. five terms in a day used a caret and none used a real apostrophe, so
   nothing is split across two spellings.
 
+## tests
+
+```
+python -m pytest -q
+```
+
+98 tests, no network needed. most of them need no database either: the arithmetic, the
+report formatting, the api retry behaviour, the loader's parsing and filtering, and the
+checks that halt a bad load are all plain functions. `requests.get` is swapped out for
+the retry tests, so nothing is fetched.
+
+the ones that do need postgres run against a separate database called `faers_test`, never
+the one holding the loaded data, and they skip when no server is reachable:
+
+```
+createdb faers_test
+python -m pytest -q
+```
+
+| file | what it covers |
+|---|---|
+| `test_signals.py` | PRR and ROR, hand worked, including the zero cells |
+| `test_report.py` | ranking, the caret fix, the caveats staying in the output |
+| `test_fetch.py` | 429 then 200, giving up, 404 as no match, no network |
+| `test_ingest.py` | a report into rows, and the halt on an empty fetch |
+| `test_bulk_ingest.py` | the dollar delimited parsing and the report filter |
+| `test_bulk_checks.py` | schema drift, empty files, a shrunken detail file |
+| `test_database.py` | idempotency, resumability, and the statistics query |
+| `test_evaluate.py` | AUC, recall, specificity, precision@K |
+| `test_fixture.py` | the whole evaluation against a committed fixture |
+
+`test_fixture.py` is the regression check. it loads `fixtures/euadr_fixture.sql`, 3,060
+synthetic reports built so every reference pair is either clearly enriched or clearly
+not, and asserts the exact recall, specificity and AUC that fixture produces. those
+numbers are about the code still doing what it did, not about the method, which is what
+the README numbers above are for.
+
 ## next
 
-milestone 8 is the tests in CI, including the EU-ADR evaluation as a regression check,
-and committed fixture data so CI needs no network. milestone 9 is the scheduled job that
-runs the delta and publishes the signals.
+milestone 9 is the scheduled job that runs the delta and publishes the signals to a cloud
+database, with the report committed back so the workflow does not go inactive.
