@@ -18,3 +18,7 @@ fixtures/*.rda
 
 # Quarterly extracts, re-downloaded by bulk_ingest.py. Far too large for the repo.
 data/
+
+# Full query plans, written by capture_plans.py. The README shows the four lines that
+# matter as a screenshot, so the whole plan does not need keeping.
+docs/captures/

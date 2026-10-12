@@ -7,6 +7,32 @@ the counting is the easy part. the interesting bit is working out which pairs ge
 reported more often than you'd expect by chance, then checking that ranking against
 published reference signals.
 
+## what it does, without running it
+
+every screenshot below is this repository running on this machine. the four that matter
+most are in this section. nothing here is mocked up.
+
+**the api side**, one query against openFDA:
+
+![python run.py IBUPROFEN NAUSEA](docs/images/count.png)
+
+**the evaluation** against the EU-ADR reference set, scored on the loaded quarter. this is
+the number the project is judged on:
+
+![python evaluate.py](docs/images/evaluate.png)
+
+**the query plan**, before and after replacing a per row aggregate with a materialized
+view. four lines, and they are the whole argument for doing it:
+
+![the same query, before and after](docs/images/explain.png)
+
+**the ranked report**. the caveat at the top is not decoration:
+
+![report.md](docs/images/report.png)
+
+the section further down has the rest: the test suite, the runs table, CI, and the hosted
+database.
+
 ## where it is
 
 milestones 1 to 10 are done, the last one being optional. `run.py` counts reports from the
@@ -20,12 +46,33 @@ the full 2024 Q1 extract, 406,184 reports, loaded as 10,308,028 rows in 218 seco
 522,047 pairs with at least three reports. loading the same quarter twice adds nothing,
 because the primary key rejects rows that are already there.
 
-the marginals are materialized, which takes the pair query from 1699 ms to 8.9 ms,
-measured with EXPLAIN ANALYZE.
+the marginals are materialized, which took the pair query from about 1650 ms to 8.5 ms
+warm, measured with EXPLAIN ANALYZE. the screenshot above is that measurement.
 
-the evaluation now scores 91 of the 93 reference pairs, at an AUC of 0.687. both numbers
-were 47 of 93 and 0.571 when only a day of api data was loaded, which is the point of
-having the bulk files at all.
+the evaluation scores 91 of the 93 reference pairs, at an AUC of 0.687. both numbers were
+47 of 93 and 0.571 when only a day of api data was loaded, which is the point of having
+the bulk files at all.
+
+## the rest of it
+
+**the test suite**, 113 tests, 97 of which need no database:
+
+![python -m pytest -q](docs/images/tests.png)
+
+**the runs table**, which is what makes a job that quietly stopped visible instead of
+leaving no trace:
+
+![python run.py --status](docs/images/status.png)
+
+**the workflows**, on GitHub. the same suite runs in CI against a postgres service, and
+the publish job loads a quarter and writes the signals to a hosted database:
+
+![GitHub Actions](docs/images/actions.png)
+
+**the hosted database**. only the computed signals go there, never the raw reports, which
+is what keeps it inside a free tier. this is the row count after the workflow published:
+
+![the signals table in Neon](docs/images/neon.png)
 
 ## what this is not
 
@@ -66,11 +113,15 @@ python run.py --status
 ```
 
 ```
-   id  started               source  detail              read          new  took        status
-    4  2026-10-12 12:23:54  bulk   2024q1           406,184   10,308,028  0:04:02.779174  ok
-    1  2026-10-12 12:22:22  bulk   2024q1            20,000    2,663,644  0:01:01.819595  ok
-last successful run: 2026-10-12 12:23:54
+   id  started               source  detail              read          new  took       status
+    5  2026-10-12 13:11:23  bulk   2024q1           406,184   10,308,028  0:04:03    ok
+    4  2026-10-12 12:23:54  bulk   2024q1           406,184   10,308,028  0:04:02    ok
+    1  2026-10-12 12:22:22  bulk   2024q1            20,000    2,663,644  0:01:01    ok
+last successful run: 2026-10-12 13:11:23
 ```
+
+the ids are not consecutive because test rows were deleted along the way. a gap in an
+identity column is not a gap in the runs.
 
 a failure is recorded with its error and then raised, so the traceback still shows. three
 failures in a row prints an ALERT rather than a warning, because one bad run can just be
@@ -195,8 +246,9 @@ python signals.py --min-reports 5
 
 the drug and reaction marginals are materialized views, refreshed at the end of every
 load. computing them per row instead turns a pair lookup into a full aggregate over ten
-million rows: the same query goes from 8.9 ms to 1699 ms, which is the difference
-between a lookup and 17 bitmap scans reading 252,254 buffers.
+million rows, and the same query went from about 1650 ms to 8.5 ms. the difference is
+that the slow version ran 17 bitmap scans reading 252,254 buffers to rebuild a number it
+could have looked up.
 
 `report.py` ranks them into markdown. that file isn't committed because the numbers move
 with the data.
@@ -359,7 +411,7 @@ that guard a scheduled job would publish nonsense quite happily.
 
 | workflow | when | what it does |
 |---|---|---|
-| `check.yml` | push and pull request | the 105 tests, against a postgres service |
+| `check.yml` | push and pull request | the 113 tests, against a postgres service |
 | `daily.yml` | 06:20 UTC | ingests yesterday from the api, ranks, commits `report.md` back |
 | `publish.yml` | weekly, or by hand | loads a quarter, then publishes the signals |
 
