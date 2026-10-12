@@ -9,10 +9,10 @@ published reference signals.
 
 ## where it is
 
-milestones 1 to 6 are done. `run.py` counts reports from the openFDA api, `ingest.py`
-loads a date range from the api, `bulk_ingest.py` loads the quarterly extract files,
-`signals.py` does PRR and ROR, `report.py` writes the ranking to markdown, and
-`evaluate.py` scores it against the EU-ADR reference set.
+milestones 1 to 7 are done. `run.py` counts reports from the openFDA api and reports on
+past runs, `ingest.py` loads a date range from the api, `bulk_ingest.py` loads the
+quarterly extract files, `signals.py` does PRR and ROR, `report.py` writes the ranking to
+markdown, and `evaluate.py` scores it against the EU-ADR reference set.
 
 the full 2024 Q1 extract, 406,184 reports, loaded as 10,308,028 rows in 218 seconds, for
 522,047 pairs with at least three reports. loading the same quarter twice adds nothing,
@@ -53,6 +53,36 @@ reports with IBUPROFEN and NAUSEA:
 ```
 
 run from the repo root, `run.py` imports `fetch.py` from the same folder.
+
+## when a run fails
+
+every load writes a row to the `runs` table, ok or failed, so a job that quietly stopped
+leaves a trace instead of nothing at all.
+
+```
+python run.py --status
+```
+
+```
+   id  started               source  detail              read          new  took        status
+    4  2026-10-12 12:23:54  bulk   2024q1           406,184   10,308,028  0:04:02.779174  ok
+    1  2026-10-12 12:22:22  bulk   2024q1            20,000    2,663,644  0:01:01.819595  ok
+last successful run: 2026-10-12 12:23:54
+```
+
+a failure is recorded with its error and then raised, so the traceback still shows. three
+failures in a row prints an ALERT rather than a warning, because one bad run can just be
+a bad night for the api and three is a pattern.
+
+the loader halts rather than writing something wrong in three cases:
+
+- **schema drift.** if a file no longer has the columns it used to, the load stops
+  instead of silently dropping a field. the fda has changed this extract before.
+- **an empty file.** zero reports is the shape of a silent failure.
+- **a shrunken detail file.** if DRUG or REAC yields far fewer rows per report than
+  expected, the statistics would be computed on a fraction of the reactions without
+  anything looking broken. a quarter gives about 4.7 drug rows and 3.6 reaction rows per
+  report, and the floors sit under that.
 
 ## loading reports into postgres
 
@@ -266,5 +296,6 @@ reporting would need saying too.
 
 ## next
 
-milestone 7 is the failure handling: the `runs` table, halting on a partial ingest, and
-`run.py --status` so a job that quietly stopped is visible.
+milestone 8 is the tests in CI, including the EU-ADR evaluation as a regression check,
+and committed fixture data so CI needs no network. milestone 9 is the scheduled job that
+runs the delta and publishes the signals.

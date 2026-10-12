@@ -4,6 +4,7 @@ import os
 import sys
 
 import db
+import runs
 from fetch import OpenFdaError, count_reports_in_range, fetch_reports
 
 INSERT_ROW = """
@@ -81,14 +82,17 @@ def main():
 
     conn = db.connect()
     db.apply_schema(conn)
-    with conn.cursor() as cur:
-        cur.execute("SELECT count(*) FROM events")
-        before = cur.fetchone()[0]
-        cur.executemany(INSERT_ROW, rows)
-        cur.execute("SELECT count(*) FROM events")
-        after = cur.fetchone()[0]
-    conn.commit()
-    db.refresh_marginals(conn)
+    with runs.record(conn, "api", f"{args.since}..{args.until}") as run:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM events")
+            before = cur.fetchone()[0]
+            cur.executemany(INSERT_ROW, rows)
+            cur.execute("SELECT count(*) FROM events")
+            after = cur.fetchone()[0]
+        conn.commit()
+        run.rows_read = len(reports)
+        run.rows_new = after - before
+        db.refresh_marginals(conn)
     conn.close()
 
     print(f"{before:,} rows in events before, {after:,} after, {after - before:,} new")

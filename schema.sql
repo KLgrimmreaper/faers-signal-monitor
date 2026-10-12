@@ -32,3 +32,19 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS event_totals AS
 
 CREATE UNIQUE INDEX IF NOT EXISTS drug_totals_drug         ON drug_totals (drug);
 CREATE UNIQUE INDEX IF NOT EXISTS reaction_totals_reaction ON reaction_totals (reaction);
+
+-- one row per load attempt, so a job that quietly stopped is visible afterwards. status
+-- is 'ok' or the error, which is what makes a failure loud instead of silent
+CREATE TABLE IF NOT EXISTS runs (
+    run_id      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    run_date    DATE NOT NULL DEFAULT current_date,
+    source      TEXT NOT NULL,            -- 'api' or 'bulk'
+    detail      TEXT,                     -- what was asked for
+    rows_read   INTEGER,
+    rows_new    INTEGER,
+    status      TEXT NOT NULL,
+    started_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS runs_started_at ON runs (started_at DESC);

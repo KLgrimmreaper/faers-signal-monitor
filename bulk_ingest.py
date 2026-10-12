@@ -19,8 +19,15 @@ import urllib.request
 import zipfile
 
 import db
+import runs
 
 DOWNLOAD = "https://fis.fda.gov/content/Exports/faers_ascii_{quarter}.zip"
+
+# A quarter of 2024q1 gives about 4.7 drug rows and 3.6 reaction rows per report. These
+# floors sit well under that: they are there to catch a file that loaded but contributed
+# almost nothing, not to police normal variation between quarters.
+DRUG_PER_REPORT = 3.0
+REACTION_PER_REPORT = 2.0
 
 STAGING = """
     DROP TABLE IF EXISTS stage_demo;
@@ -93,10 +100,59 @@ def download(quarter, folder):
     return target
 
 
-def read_columns(handle, columns):
+class SchemaDrift(Exception):
+    """A file no longer has the columns this loader expects."""
+
+
+# the load halts on these rather than guessing. the fda has changed the extract before,
+# and a rename would silently drop a field instead of failing
+EXPECTED = {
+    "demo": ["primaryid", "caseversion", "fda_dt"],
+    "drug": ["primaryid", "drugname", "role_cod"],
+    "reac": ["primaryid", "pt"],
+}
+
+
+def check_header(header, label):
+    missing = [column for column in EXPECTED[label] if column not in header]
+    if missing:
+        raise SchemaDrift(
+            f"{label} is missing {missing}. the file has {header}. "
+            f"stopping rather than loading a partial record"
+        )
+    return [header.index(column) for column in EXPECTED[label]]
+
+
+def check_not_empty(label, rows):
+    if rows == 0:
+        raise ValueError(
+            f"{label} produced 0 rows. that is the shape of a silent failure, "
+            f"so the load stops instead of writing a partial one"
+        )
+
+
+def check_median(label, rows, read, ceiling):
+    """Halt when a file yields far fewer rows per report than it should.
+
+    The failure this catches: a file loads, reports are written, but the detail file
+    contributed almost nothing, so the statistics are quietly computed on a fraction of
+    the reactions. A silent shrink is worse than a crash.
+    """
+    if read == 0:
+        return
+    rate = rows / read
+    if rate < ceiling:
+        raise ValueError(
+            f"{label} gave {rate:.1f} rows per report, under the {ceiling} expected. "
+            f"{rows:,} rows for {read:,} reports. stopping rather than loading a partial"
+        )
+    print(f"  {label}: {rate:.1f} rows per report")
+
+
+def read_columns(handle, label):
     header = handle.readline().decode("latin-1").rstrip("\r\n").split("$")
-    positions = [header.index(column) for column in columns]
-    print(f"  columns {columns} at {positions}")
+    positions = check_header(header, label)
+    print(f"  {label}: columns {EXPECTED[label]} at {positions}")
     return header, positions
 
 
@@ -127,6 +183,82 @@ def copy_stream(conn, statement, rows):
                 copy.write_row(row)
 
 
+def count_and_copy(conn, statement, rows):
+    """Copy a stream and return how many rows went through."""
+    copied = 0
+    with conn.cursor() as cur:
+        with cur.copy(statement) as copy:
+            for row in rows:
+                copy.write_row(row)
+                copied += 1
+    return copied
+
+
+def load(conn, archive, members, limit):
+    """Stage, join and return (reports, rows_added). Raises rather than half loading."""
+    print("building staging tables")
+    with conn.cursor() as cur:
+        cur.execute(STAGING)
+    conn.commit()
+
+    print("demo")
+    with archive.open(members["demo"]) as handle:
+        header, positions = read_columns(handle, "demo")
+        demo_rows = list(stream_rows(handle, header, positions, limit))
+    check_not_empty("demo", len(demo_rows))
+    copy_stream(conn, "COPY stage_demo (primaryid, caseversion, fda_dt) FROM STDIN", demo_rows)
+    conn.commit()
+    # DEMO has to be held in memory because the detail files are filtered against it.
+    # At a quarter of reports that is a few hundred thousand ids, which is fine.
+    keep = {row[0] for row in demo_rows}
+    del demo_rows
+    reports = len(keep)
+    print(f"  {reports:,} reports staged")
+
+    print("drug")
+    step = time.time()
+    with archive.open(members["drug"]) as handle:
+        header, positions = read_columns(handle, "drug")
+        drug_rows = count_and_copy(
+            conn,
+            "COPY stage_drug (primaryid, drugname, role_cod) FROM STDIN",
+            stream_rows(handle, header, positions, keep=keep),
+        )
+    check_not_empty("drug", drug_rows)
+    check_median("drug", drug_rows, reports, DRUG_PER_REPORT)
+    print(f"  copied in {time.time() - step:.1f}s")
+
+    print("reaction")
+    step = time.time()
+    with archive.open(members["reac"]) as handle:
+        header, positions = read_columns(handle, "reac")
+        reaction_rows = count_and_copy(
+            conn,
+            "COPY stage_reac (primaryid, pt) FROM STDIN",
+            stream_rows(handle, header, positions, keep=keep),
+        )
+    check_not_empty("reac", reaction_rows)
+    check_median("reac", reaction_rows, reports, REACTION_PER_REPORT)
+    print(f"  copied in {time.time() - step:.1f}s")
+
+    print("indexing staging tables")
+    step = time.time()
+    with conn.cursor() as cur:
+        cur.execute(INDEXES)
+    conn.commit()
+    print(f"  indexed in {time.time() - step:.1f}s")
+
+    print("joining")
+    step = time.time()
+    with conn.cursor() as cur:
+        cur.execute(MERGE)
+        added = cur.rowcount
+    conn.commit()
+    print(f"  joined in {time.time() - step:.1f}s")
+
+    return reports, added
+
+
 def main():
     parser = argparse.ArgumentParser(description="load a quarterly faers extract")
     parser.add_argument("--quarter", default="2024q1")
@@ -135,10 +267,11 @@ def main():
     parser.add_argument("--replace", action="store_true", help="clear events first")
     args = parser.parse_args()
 
+    quarter = args.quarter.lower()
     folder = pathlib.Path(args.data)
     folder.mkdir(exist_ok=True)
-    archive_path = download(args.quarter.lower(), folder)
-    members = quarter_files(args.quarter.lower())
+    archive_path = download(quarter, folder)
+    members = quarter_files(quarter)
 
     conn = db.connect()
     db.apply_schema(conn)
@@ -152,74 +285,24 @@ def main():
     print(f"events before: {before:,}")
 
     started = time.time()
-    with zipfile.ZipFile(archive_path) as archive:
-        print("building staging tables")
-        with conn.cursor() as cur:
-            cur.execute(STAGING)
-        conn.commit()
+    # the run row is written first and closed either way, so a failure is recorded
+    with runs.record(conn, "bulk", quarter) as run:
+        with zipfile.ZipFile(archive_path) as archive:
+            reports, added = load(conn, archive, members, args.limit)
+        run.rows_read = reports
+        run.rows_new = added
 
-        print("demo")
-        with archive.open(members["demo"]) as handle:
-            header, positions = read_columns(handle, ["primaryid", "caseversion", "fda_dt"])
-            demo_rows = list(stream_rows(handle, header, positions, args.limit))
-        copy_stream(conn, "COPY stage_demo (primaryid, caseversion, fda_dt) FROM STDIN", demo_rows)
-        conn.commit()
-        # DEMO has to be held in memory because the detail files are filtered against it.
-        # At a quarter of reports that is a few hundred thousand ids, which is fine.
-        keep = {row[0] for row in demo_rows}
-        del demo_rows
-        print(f"  {len(keep):,} reports staged in {time.time() - started:.1f}s")
-
-        print("drug")
-        step = time.time()
-        with archive.open(members["drug"]) as handle:
-            header, positions = read_columns(handle, ["primaryid", "drugname", "role_cod"])
-            copy_stream(
-                conn,
-                "COPY stage_drug (primaryid, drugname, role_cod) FROM STDIN",
-                stream_rows(handle, header, positions, keep=keep),
-            )
-        conn.commit()
-        print(f"  drug rows copied in {time.time() - step:.1f}s")
-
-        print("reaction")
-        step = time.time()
-        with archive.open(members["reac"]) as handle:
-            header, positions = read_columns(handle, ["primaryid", "pt"])
-            copy_stream(
-                conn,
-                "COPY stage_reac (primaryid, pt) FROM STDIN",
-                stream_rows(handle, header, positions, keep=keep),
-            )
-        conn.commit()
-        print(f"  reaction rows copied in {time.time() - step:.1f}s")
-
-        print("indexing staging tables")
-        step = time.time()
-        with conn.cursor() as cur:
-            cur.execute(INDEXES)
-        conn.commit()
-        print(f"  indexed in {time.time() - step:.1f}s")
-
-        print("joining")
-        step = time.time()
-        with conn.cursor() as cur:
-            cur.execute(MERGE)
-            added = cur.rowcount
-        conn.commit()
-        print(f"  joined in {time.time() - step:.1f}s")
+        print("refreshing the marginals")
+        db.refresh_marginals(conn)
 
         with conn.cursor() as cur:
             cur.execute("SELECT count(*), count(DISTINCT report_id) FROM events")
-            after, reports = cur.fetchone()
-
-    print("refreshing the marginals")
-    db.refresh_marginals(conn)
+            after, total_reports = cur.fetchone()
 
     conn.close()
     print()
     print(f"rows added: {added:,}")
-    print(f"events now: {after:,} rows for {reports:,} reports")
+    print(f"events now: {after:,} rows for {total_reports:,} reports")
     print(f"total time: {time.time() - started:.1f}s")
     return 0
 

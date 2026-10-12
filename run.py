@@ -1,12 +1,17 @@
 import os
 import sys
 
+import runs
 from fetch import OpenFdaError, build_search, count_reports
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "--status":
+        return runs.main()
+
     if len(sys.argv) < 2:
         print("usage: python run.py DRUG [REACTION]")
+        print("       python run.py --status")
         return 1
 
     drug = sys.argv[1]
