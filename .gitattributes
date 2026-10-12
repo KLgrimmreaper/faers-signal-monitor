@@ -1,0 +1,3 @@
+# core.autocrlf is true on this machine, so without this git would rewrite the
+# existing LF files to CRLF the next time they are touched. Keep the repository LF.
+* text=auto eol=lf

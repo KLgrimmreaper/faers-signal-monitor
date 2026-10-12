@@ -1,0 +1,22 @@
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: No em dashes or en dashes
+        run: python check_dashes.py
+      # signals.py imports psycopg at the top, so the driver has to be present even
+      # though these tests never open a connection.
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt pytest
+      - name: Tests
+        run: python -m pytest -q

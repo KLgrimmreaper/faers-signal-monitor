@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+
+# Working scaffolding, not part of the deliverable.
+PLAN.md
+NOTES.md
+.piptmp/
+pytest-cache-files-*/
+
+# Generated output. Rebuild it with report.py rather than keeping a stale copy.
+report.md
+
+# Downloaded by make_reference_set.py. The converted CSV beside it is committed.
+fixtures/*.rda

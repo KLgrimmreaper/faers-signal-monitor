@@ -1,0 +1,6 @@
+requests==2.34.2
+psycopg[binary]==3.3.6
+
+# Only needed to rebuild fixtures/euadr_reference_set.csv from the published R data
+# file. The evaluation itself reads the CSV and does not import this.
+pyreadr==0.5.7
