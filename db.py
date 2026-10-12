@@ -37,6 +37,17 @@ def connect():
     return psycopg.connect(conninfo)
 
 
+def connect_cloud():
+    """The hosted database, from CLOUD_DATABASE_URL."""
+    url = os.environ.get("CLOUD_DATABASE_URL")
+    if not url:
+        raise RuntimeError(
+            "CLOUD_DATABASE_URL is not set. it is the connection string for the hosted "
+            "database, and the raw records never go there"
+        )
+    return psycopg.connect(url)
+
+
 def apply_schema(conn):
     sql = pathlib.Path(__file__).with_name("schema.sql").read_text()
     with conn.cursor() as cur:

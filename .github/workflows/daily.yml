@@ -1,0 +1,93 @@
+name: daily
+
+on:
+  schedule:
+    # 06:20 UTC. the time does not matter much, what matters is that it commits
+    - cron: "20 6 * * *"
+  workflow_dispatch:
+
+# the job commits the report back, which needs write access to contents
+permissions:
+  contents: write
+
+jobs:
+  delta:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: faers
+          POSTGRES_PASSWORD: faers
+          POSTGRES_DB: faers
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U faers"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: faers
+      PGPASSWORD: faers
+      PGDATABASE: faers
+      OPENFDA_API_KEY: ${{ secrets.OPENFDA_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      # a runner starts with an empty database and a day of reports is not a population,
+      # so this job does not publish. publishing is a separate job that runs against a
+      # loaded table. what this one is for is proving the scheduled path still works
+      - name: Ingest yesterday
+        run: |
+          python ingest.py \
+            --since "$(date -u -d yesterday +%Y%m%d)" \
+            --until "$(date -u -d yesterday +%Y%m%d)"
+
+      - name: Rank the pairs
+        run: python report.py
+
+      - name: Show the run log
+        run: python run.py --status
+
+      # committing the report is not decoration. a scheduled workflow is disabled after
+      # sixty days of repository inactivity, and a cron that never commits counts as
+      # inactive, so without this the job can stop silently
+      - name: Commit the report
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -f report.md
+          if git diff --cached --quiet; then
+            echo "no change to the report"
+          else
+            git commit -m "daily report $(date -u +%Y-%m-%d)"
+            git push
+          fi
+
+      # three failed runs in a row is the alert, which is what the runs table is for
+      - name: Fail the job when three runs in a row failed
+        run: |
+          python - <<'PY'
+          import sys
+          import db, runs
+          conn = db.connect()
+          failures = runs.consecutive_failures(conn)
+          conn.close()
+          if failures >= runs.ALERT_AFTER:
+              print(f"ALERT: {failures} runs failed in a row")
+              sys.exit(1)
+          print(f"consecutive failures: {failures}")
+          PY

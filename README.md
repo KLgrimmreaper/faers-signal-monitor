@@ -12,7 +12,7 @@ published reference signals.
 milestones 1 to 8 are done. `run.py` counts reports from the openFDA api and reports on
 past runs, `ingest.py` loads a date range from the api, `bulk_ingest.py` loads the
 quarterly extract files, `signals.py` does PRR and ROR, `report.py` writes the ranking to
-markdown, and `evaluate.py` scores it against the EU-ADR reference set. 98 tests.
+markdown, and `evaluate.py` scores it against the EU-ADR reference set. 105 tests.
 
 the full 2024 Q1 extract, 406,184 reports, loaded as 10,308,028 rows in 218 seconds, for
 522,047 pairs with at least three reports. loading the same quarter twice adds nothing,
@@ -300,7 +300,7 @@ reporting would need saying too.
 python -m pytest -q
 ```
 
-98 tests, no network needed. most of them need no database either: the arithmetic, the
+105 tests, no network needed. most of them need no database either: the arithmetic, the
 report formatting, the api retry behaviour, the loader's parsing and filtering, and the
 checks that halt a bad load are all plain functions. `requests.get` is swapped out for
 the retry tests, so nothing is fetched.
@@ -324,6 +324,7 @@ python -m pytest -q
 | `test_database.py` | idempotency, resumability, and the statistics query |
 | `test_evaluate.py` | AUC, recall, specificity, precision@K |
 | `test_fixture.py` | the whole evaluation against a committed fixture |
+| `test_publish.py` | the selection, and the population floor |
 
 `test_fixture.py` is the regression check. it loads `fixtures/euadr_fixture.sql`, 3,060
 synthetic reports built so every reference pair is either clearly enriched or clearly
@@ -331,7 +332,55 @@ not, and asserts the exact recall, specificity and AUC that fixture produces. th
 numbers are about the code still doing what it did, not about the method, which is what
 the README numbers above are for.
 
+## publishing to the hosted database
+
+the bulk data stays local, because a year of FAERS reports does not fit in a free tier.
+only the computed signals get published, so the hosted database holds results rather than
+raw records.
+
+```
+CLOUD_DATABASE_URL=... python publish.py --top 1000 --require-full
+```
+
+`signals_schema.sql` is the hosted side: one row per run date, drug and reaction, with
+the two ratios and the counts behind them. the primary key is the run date and the pair,
+so publishing twice in a day replaces that day's rows instead of duplicating them, and
+each row carries the run date so a number from three months ago is explainable.
+
+`--require-full` refuses to publish unless the local table holds at least 100,000
+reports. a disproportionality statistic computed from a day of reports is not a
+disproportionality statistic, and a CI runner starts with an empty database, so without
+that guard a scheduled job would publish nonsense quite happily.
+
+### what runs on a schedule
+
+| workflow | when | what it does |
+|---|---|---|
+| `check.yml` | push and pull request | the 105 tests, against a postgres service |
+| `daily.yml` | 06:20 UTC | ingests yesterday from the api, ranks, commits `report.md` back |
+| `publish.yml` | weekly, or by hand | loads a quarter, then publishes the signals |
+
+`daily.yml` does not publish, on purpose. it starts from an empty database, so it has a
+day of reports and nothing meaningful to publish. it exists to prove the scheduled path
+still works and to keep the repository active.
+
+committing `report.md` back is not decoration. a scheduled workflow is disabled after
+sixty days of repository inactivity, and a cron that never commits counts as inactive, so
+without that step the job can stop silently, which is the exact failure this project is
+about.
+
+### the image
+
+```
+docker build -t faers-signal-monitor .
+docker run --rm -e PGHOST=host.docker.internal faers-signal-monitor
+```
+
+the image holds the scripts and no credentials; connection settings come from the
+environment. it is not on a registry, since publishing it needs credentials this machine
+does not have.
+
 ## next
 
-milestone 9 is the scheduled job that runs the delta and publishes the signals to a cloud
-database, with the report committed back so the workflow does not go inactive.
+milestone 10 is optional: a small model on top of PRR, evaluated against the same
+reference set, with an honest verdict either way.

@@ -1,0 +1,16 @@
+# builds the pipeline image and runs it against a real postgres
+
+services:
+  app:
+    build: .
+    container_name: faers-app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: faers
+      PGPASSWORD: faers
+      PGDATABASE: faers
+    command: ["python", "run.py", "--status"]
