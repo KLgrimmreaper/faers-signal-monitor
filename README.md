@@ -141,7 +141,7 @@ python report.py --top 100 --min-reports 5 --out report.md
 the report starts with what it was computed from, the report count and the date range.
 right now it says the table holds a single day.
 
-**the numbers from one day are not usable as signals.** 1508 reports and 1401 distinct
+the numbers from one day are not usable as signals. 1508 reports and 1401 distinct
 reactions means a four report pair can hit a PRR in the hundreds. the top value right
 now, anakinra with therapy partial responder, comes from four reports. this needs the
 whole population, which is milestone 6.
