@@ -66,6 +66,17 @@ def build_markdown(signals, summary, min_reports, top, generated):
             f"| {signal['prr']:,.2f} | {ror_text} |"
         )
 
+    # sorting on raw prr puts the smallest numerators on top, so the table needs this
+    # next to it rather than in a caption somewhere else
+    lines += [
+        "",
+        "the largest ratios are the ones with the fewest reports behind them. the top row",
+        "here is a ratio computed from a numerator in single figures, which is why the",
+        "numbers run into the hundreds of thousands. this is a property of ranking on raw",
+        "prr and not a finding, and a seriousness filter or a higher report floor would",
+        "push these down.",
+    ]
+
     return "\n".join(lines) + "\n"
 
 

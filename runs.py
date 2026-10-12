@@ -116,13 +116,16 @@ def show(conn, limit=15):
         return 0
 
     print(f"{'id':>5}  {'started':<20}  {'source':<5}  {'detail':<12}  "
-          f"{'read':>10}  {'new':>11}  {'took':<10}  status")
+          f"{'read':>10}  {'new':>11}  {'took':<9}  status")
     for run_id, started, source, detail, read, new, status, took in rows:
         read_text = "-" if read is None else f"{read:,}"
         new_text = "-" if new is None else f"{new:,}"
+        # microseconds are noise in a table, and the ragged width was pushing the
+        # status column out of line
+        took_text = "-" if took is None else str(took).split(".")[0]
         print(f"{run_id:>5}  {started:%Y-%m-%d %H:%M:%S}  {source:<5}  "
               f"{(detail or '-'):<12}  {read_text:>10}  {new_text:>11}  "
-              f"{str(took or '-'):<10}  {status}")
+              f"{took_text:<9}  {status}")
 
     failures = consecutive_failures(conn)
     if failures:
