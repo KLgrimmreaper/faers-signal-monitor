@@ -1,6 +1,6 @@
 # drug and reaction pairs by prr
 
-generated 2026-11-16 from the local events table
+generated 2026-11-17 from the local events table
 
 - reports in the table: 0
 - event rows: 0
